@@ -590,7 +590,34 @@ NON_ISCSI_PORT = {
     "portal": None,
     "wwn": "5001500150015081",
 }
-NVME_PORTS_WITH = NVME_PORTS + [NON_ISCSI_PORT]
+ISCSI_LACP_PORTS = [
+    {
+        "name": "lacp2",
+        "iqn": TARGET_IQN,
+        "nqn": None,
+        "portal": None,
+        "wwn": None,
+    },
+]
+NVME_LACP_PORTS = [
+    {
+        "name": "lacp0",
+        "iqn": None,
+        "nqn": TARGET_NQN,
+        "portal": None,
+        "wwn": None,
+    },
+    {
+        "name": "lacp1",
+        "iqn": None,
+        "nqn": TARGET_NQN,
+        "portal": None,
+        "wwn": None,
+    },
+]
+NVME_PORTS_WITH = NVME_PORTS + [NON_ISCSI_PORT] + NVME_LACP_PORTS
+ISCSI_PORTS_WITH = ISCSI_PORTS + ISCSI_LACP_PORTS
+PORTS_WITH = ISCSI_PORTS + [NON_ISCSI_PORT] + ISCSI_LACP_PORTS
 PORTS_WITH = ISCSI_PORTS + [NON_ISCSI_PORT]
 PORTS_WITHOUT = [NON_ISCSI_PORT]
 TOTAL_CAPACITY = 50.0
@@ -1172,6 +1199,56 @@ QOS_BWS = {"maxBWS": "1"}
 ARRAY_RESPONSE = {
     'status_code': 200
 }
+INTERFACES = [
+    {
+        'name': 'ct0.eth4',
+        'services': ['nvme-tcp'],
+        'eth': {'address': '1.1.1.1',
+                'subtype': 'physical'},
+    },
+    {
+        'name': 'ct0.eth5',
+        'services': ['iscsi'],
+        'eth': {'address': '2.2.2.2',
+                'subtype': 'physical'},
+    },
+    {
+        'name': 'ct0.eth20',
+        'services': ['nvme-roce'],
+        'eth': {'address': '3.3.3.3',
+                'subtype': 'physical'}
+    },
+    {
+        'name': 'ct0.fc4',
+        'services': ['nvme-fc'],
+        'eth': {'address': None,
+                'subtype': 'physical'},
+    },
+    {
+        'name': 'lacp0',
+        'services': ['nvme-roce'],
+        'eth': {'address': '4.4.4.4',
+                'subtype': 'lacp_bond'},
+    },
+    {
+        'name': 'lacp1',
+        'services': ['nvme-tcp'],
+        'eth': {'address': '5.5.5.5',
+                'subtype': 'lacp_bond'},
+    },
+    {
+        'name': 'lacp2',
+        'services': ['iscsi'],
+        'eth': {'address': '6.6.6.6',
+                'subtype': 'lacp_bond'},
+    },
+    {
+        'name': 'ct0.fc1',
+        'services': ['scsi-fc'],
+        'eth': {'address': None,
+                'subtype': 'physical'},
+    }
+]
 
 
 class PureDriverTestCase(test.TestCase):
@@ -2712,7 +2789,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
     @mock.patch(BASE_DRIVER_OBJ + "._rename_volume_object")
     def test_manage_existing(self, mock_rename):
         ref_name = 'vol1'
-        volume_ref = {'name': ref_name}
+        volume_ref = {'source-name': ref_name}
         self.array.get_volumes.return_value = MPV
         self.array.get_connections.return_value = []
         vol, vol_name = self.new_fake_vol(set_provider_id=False)
@@ -2730,7 +2807,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
         self.assert_error_propagates(
             [mock_rename, mock_validate],
             self.driver.manage_existing,
-            vol, {'name': 'vol1'}
+            vol, {'source-name': 'vol1'}
         )
 
     def test_manage_existing_bad_ref(self):
@@ -2741,15 +2818,15 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
 
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing,
-                          vol, {'name': ''})
+                          vol, {'source-name': ''})
 
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing,
-                          vol, {'name': None})
+                          vol, {'source-name': None})
 
     def test_manage_existing_sync_repl_type(self):
         ref_name = 'vol1'
-        volume_ref = {'name': ref_name}
+        volume_ref = {'source-name': ref_name}
         type_spec = {
             'replication_type': '<in> sync',
             'replication_enabled': '<is> true',
@@ -2764,7 +2841,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
 
     def test_manage_existing_vol_in_pod(self):
         ref_name = 'somepod::vol1'
-        volume_ref = {'name': ref_name}
+        volume_ref = {'source-name': ref_name}
         self.array.get_connections.return_value = []
         vol, vol_name = self.new_fake_vol(set_provider_id=False)
 
@@ -2783,12 +2860,12 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
                                          [DotNotation(cvol[0])], {})
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing,
-                          vol, {'name': ref_name})
+                          vol, {'source-name': ref_name})
         self.assertFalse(mock_rename.called)
 
     def test_manage_existing_get_size(self):
         ref_name = 'vol1'
-        volume_ref = {'name': ref_name}
+        volume_ref = {'source-name': ref_name}
         expected_size = 3
         self.array.get_volumes.return_value = MPV
         vol, _ = self.new_fake_vol(set_provider_id=False)
@@ -2804,7 +2881,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
         vol, _ = self.new_fake_vol(set_provider_id=False)
         self.assert_error_propagates([mock_validate],
                                      self.driver.manage_existing_get_size,
-                                     vol, {'name': 'vol1'})
+                                     vol, {'source-name': 'vol1'})
 
     def test_manage_existing_get_size_bad_ref(self):
         vol, _ = self.new_fake_vol(set_provider_id=False)
@@ -2814,11 +2891,11 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
 
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing_get_size,
-                          vol, {'name': ''})
+                          vol, {'source-name': ''})
 
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing_get_size,
-                          vol, {'name': None})
+                          vol, {'source-name': None})
 
     @mock.patch(BASE_DRIVER_OBJ + "._rename_volume_object")
     def test_unmanage(self, mock_rename):
@@ -2862,7 +2939,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
     @mock.patch(BASE_DRIVER_OBJ + "._rename_volume_object")
     def test_manage_existing_snapshot(self, mock_rename):
         ref_name = PURE_SNAPSHOT['name']
-        snap_ref = {'name': ref_name}
+        snap_ref = {'source-name': ref_name}
         snap, snap_name = self.new_fake_snap()
         vol_rsp = ValidResponse(200, None, 1,
                                 [DotNotation(PURE_SNAPSHOT)], {})
@@ -2879,7 +2956,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
     def test_manage_existing_snapshot_multiple_snaps_on_volume(self,
                                                                mock_rename):
         ref_name = PURE_SNAPSHOT['name']
-        snap_ref = {'name': ref_name}
+        snap_ref = {'source-name': ref_name}
         pure_snaps = [PURE_SNAPSHOT]
         snap, snap_name = self.new_fake_snap()
         for i in range(5):
@@ -2902,7 +2979,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
         self.assert_error_propagates(
             [mock_validate],
             self.driver.manage_existing_snapshot,
-            snap, {'name': PURE_SNAPSHOT['name']}
+            snap, {'source-name': PURE_SNAPSHOT['name']}
         )
 
     def test_manage_existing_snapshot_bad_ref(self):
@@ -2915,13 +2992,13 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
         snap, _ = self.new_fake_snap()
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing_snapshot,
-                          snap, {'name': ''})
+                          snap, {'source-name': ''})
 
     def test_manage_existing_snapshot_none_ref(self):
         snap, _ = self.new_fake_snap()
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing_snapshot,
-                          snap, {'name': None})
+                          snap, {'source-name': None})
 
     def test_manage_existing_snapshot_volume_ref_not_exist(self):
         snap, _ = self.new_fake_snap()
@@ -2930,11 +3007,11 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
         self.array.get_volumes.return_value = err_rsp
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing_snapshot,
-                          snap, {'name': 'non-existing-volume.snap1'})
+                          snap, {'source-name': 'non-existing-volume.snap1'})
 
     def test_manage_existing_snapshot_ref_not_exist(self):
         ref_name = PURE_SNAPSHOT['name'] + '-fake'
-        snap_ref = {'name': ref_name}
+        snap_ref = {'source-name': ref_name}
         snap, _ = self.new_fake_snap()
         err_rsp = ErrorResponse(400, [DotNotation({'message':
                                       'does not exist'})], {})
@@ -2945,7 +3022,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
 
     def test_manage_existing_snapshot_get_size(self):
         ref_name = PURE_SNAPSHOT['name']
-        snap_ref = {'name': ref_name}
+        snap_ref = {'source-name': ref_name}
         self.array.get_volumes.return_value = MPV
         self.array.get_volume_snapshots.return_value = MPS
         snap, _ = self.new_fake_snap()
@@ -2977,13 +3054,13 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
         snap, _ = self.new_fake_snap()
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing_snapshot_get_size,
-                          snap, {'name': ''})
+                          snap, {'source-name': ''})
 
     def test_manage_existing_snapshot_get_size_none_ref(self):
         snap, _ = self.new_fake_snap()
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing_snapshot_get_size,
-                          snap, {'name': None})
+                          snap, {'source-name': None})
 
     def test_manage_existing_snapshot_get_size_volume_ref_not_exist(self):
         snap, _ = self.new_fake_snap()
@@ -2992,7 +3069,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
         self.array.get_volumes.return_value = err_rsp
         self.assertRaises(exception.ManageExistingInvalidReference,
                           self.driver.manage_existing_snapshot_get_size,
-                          snap, {'name': 'non-existing-volume.snap1'})
+                          snap, {'source-name': 'non-existing-volume.snap1'})
 
     @ddt.data(
         # 96 chars, will exceed allowable length
@@ -4169,7 +4246,7 @@ class PureBaseVolumeDriverTestCase(PureBaseSharedDriverTestCase):
                                       mock_qos):
         ctxt = context.get_admin_context()
         ref_name = 'vol1'
-        volume_ref = {'name': ref_name}
+        volume_ref = {'source-name': ref_name}
         qos = qos_specs.create(ctxt, "qos-iops-bws", QOS_IOPS_BWS)
         vol, vol_name = self.new_fake_vol(set_provider_id=False,
                                           type_qos_specs_id=qos.id)
@@ -4498,21 +4575,27 @@ class PureISCSIDriverTestCase(PureBaseSharedDriverTestCase):
     def test_get_target_iscsi_ports(self):
         self.array.get_controllers.return_value = CTRL_OBJ
         self.array.get_ports.return_value = VALID_ISCSI_PORTS
+        self.array.get_network_interfaces.return_value = ValidResponse(
+            200, None, 1, [DotNotation(INTERFACES[1])], {})
         ret = self.driver._get_target_iscsi_ports(self.array)
-        self.assertEqual(ISCSI_PORTS[0:4], ret)
+        self.assertEqual(ISCSI_PORTS[0:4], ret[0:4])
 
     def test_get_target_iscsi_ports_with_iscsi_and_fc(self):
         self.array.get_controllers.return_value = CTRL_OBJ
-        PORTS_DATA = [DotNotation(i) for i in PORTS_WITH]
+        PORTS_DATA = [DotNotation(i) for i in ISCSI_PORTS_WITH]
         ifc_ports = ValidResponse(200, None, 1, PORTS_DATA, {})
         self.array.get_ports.return_value = ifc_ports
+        self.array.get_network_interfaces.return_value = ValidResponse(
+            200, None, 1, [DotNotation(INTERFACES[0])], {})
         ret = self.driver._get_target_iscsi_ports(self.array)
-        self.assertEqual(ISCSI_PORTS, ret)
+        self.assertEqual(ISCSI_PORTS_WITH[0:9], ret[0:9])
 
     def test_get_target_iscsi_ports_with_no_ports(self):
         # Should raise an exception if there are no ports
         self.array.get_controllers.return_value = CTRL_OBJ
         no_ports = ValidResponse(200, None, 1, [], {})
+        self.array.get_network_interfaces.return_value = ValidResponse(
+            200, None, 1, [], {})
         self.array.get_ports.return_value = no_ports
         self.assertRaises(pure.PureDriverException,
                           self.driver._get_target_iscsi_ports,
@@ -4522,6 +4605,8 @@ class PureISCSIDriverTestCase(PureBaseSharedDriverTestCase):
         # Should raise an exception of there are no iscsi ports
         self.array.get_controllers.return_value = CTRL_OBJ
         PORTS_NOISCSI = [DotNotation(i) for i in PORTS_WITHOUT]
+        self.array.get_network_interfaces.return_value = ValidResponse(
+            200, None, 1, [DotNotation(INTERFACES[3])], {})
         self.array.get_ports.\
             return_value = ValidResponse(200, None, 1, PORTS_NOISCSI, {})
         self.assertRaises(pure.PureDriverException,
@@ -5669,18 +5754,20 @@ class PureNVMEDriverTestCase(PureBaseSharedDriverTestCase):
                  {'name': 'CT0.FC4',
                   'wwn': TARGET_WWN,
                   'iqn': None,
+                  'nqn': TARGET_NQN},
+                 {'name': 'LACP0',
+                  'wwn': None,
+                  'iqn': None,
+                  'nqn': TARGET_NQN},
+                 {'name': 'LACP1',
+                  'wwn': None,
+                  'iqn': None,
                   'nqn': TARGET_NQN}]
-        interfaces = [
-            {'name': 'ct0.eth4', 'services': ['nvme-tcp']},
-            {'name': 'ct0.eth5', 'services': ['iscsi']},
-            {'name': 'ct0.eth20', 'services': ['nvme-roce']},
-            {'name': 'ct0.fc4', 'services': ['nvme-fc']}
-        ]
         # Test for the nvme-tcp port
         self.driver.configuration.pure_nvme_transport = "tcp"
         self.array.get_controllers.return_value = CTRL_OBJ
         nvme_interfaces = ValidResponse(200, None, 4,
-                                        [DotNotation(interfaces[x])
+                                        [DotNotation(INTERFACES[x])
                                          for x in range(4)], {})
         self.array.get_network_interfaces.return_value = nvme_interfaces
         nvme_ports = ValidResponse(200, None, 4,
@@ -5703,17 +5790,37 @@ class PureNVMEDriverTestCase(PureBaseSharedDriverTestCase):
         # Test for the nvme-roce port
         self.driver.configuration.pure_nvme_transport = "roce"
         nvme_roce_interface = ValidResponse(200, None, 1,
-                                            [DotNotation(interfaces[2])], {})
+                                            [DotNotation(INTERFACES[2])], {})
         self.array.get_network_interfaces.return_value = nvme_roce_interface
         nvme_roce_ports = ValidResponse(200, None, 1,
                                         [DotNotation(ports[2])], {})
         self.array.get_ports.return_value = nvme_roce_ports
         ret = self.driver._get_target_nvme_ports(self.array)
-        self.assertEqual([ports[2]], ret)
+        self.assertEqual([ports[2]], [ret[0]])
+        # Test for the nvme-roce LACP port
+        self.driver.configuration.pure_nvme_transport = "roce"
+        nvme_roce_interface = ValidResponse(200, None, 1,
+                                            [DotNotation(INTERFACES[4])], {})
+        self.array.get_network_interfaces.return_value = nvme_roce_interface
+        nvme_roce_ports = ValidResponse(200, None, 1,
+                                        [DotNotation(ports[4])], {})
+        self.array.get_ports.return_value = nvme_roce_ports
+        ret = self.driver._get_target_nvme_ports(self.array)
+        self.assertEqual([ports[4]], [ret[0]])
+        # Test for the nvme-tcp LACP port
+        self.driver.configuration.pure_nvme_transport = "tcp"
+        nvme_roce_interface = ValidResponse(200, None, 1,
+                                            [DotNotation(INTERFACES[5])], {})
+        self.array.get_network_interfaces.return_value = nvme_roce_interface
+        nvme_roce_ports = ValidResponse(200, None, 1,
+                                        [DotNotation(ports[5])], {})
+        self.array.get_ports.return_value = nvme_roce_ports
+        ret = self.driver._get_target_nvme_ports(self.array)
+        self.assertEqual([ports[5]], [ret[0]])
         # Test for empty dict if only nvme-fc port
         self.driver.configuration.pure_nvme_transport = "roce"
         nvme_fc_interface = ValidResponse(200, None, 1,
-                                          [DotNotation(interfaces[3])], {})
+                                          [DotNotation(INTERFACES[3])], {})
         self.array.get_network_interfaces.return_value = nvme_fc_interface
         nvme_fc_ports = ValidResponse(200, None, 1,
                                       [DotNotation(ports[3])], {})
@@ -5725,7 +5832,9 @@ class PureNVMEDriverTestCase(PureBaseSharedDriverTestCase):
         # Should raise an exception if there are no ports
         self.array.get_controllers.return_value = CTRL_OBJ
         nvme_no_ports = ValidResponse(200, None, 1, [], {})
+        nvme_no_interfaces = ValidResponse(200, None, 1, [], {})
         self.array.get_ports.return_value = nvme_no_ports
+        self.array.get_network_interfaces.return_value = nvme_no_interfaces
         self.assertRaises(
             pure.PureDriverException,
             self.driver._get_target_nvme_ports,
@@ -5735,8 +5844,12 @@ class PureNVMEDriverTestCase(PureBaseSharedDriverTestCase):
     def test_get_target_nvme_ports_with_only_fc_ports(self):
         # Should raise an exception of there are no nvme ports
         self.array.get_controllers.return_value = CTRL_OBJ
-        nvme_noports = ValidResponse(200, None, 1, [PORTS_WITHOUT], {})
+        PORTS_NONVME = [DotNotation(i) for i in PORTS_WITHOUT]
+        nvme_noports = ValidResponse(200, None, 1, PORTS_NONVME, {})
+        nvme_nointerfaces = ValidResponse(200, None, 1,
+                                          [DotNotation(INTERFACES[3])], {})
         self.array.get_ports.return_value = nvme_noports
+        self.array.get_network_interfaces.return_value = nvme_nointerfaces
         self.assertRaises(
             pure.PureDriverException,
             self.driver._get_target_nvme_ports,

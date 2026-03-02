@@ -1484,17 +1484,19 @@ class PureBaseVolumeDriver(san.SanDriver):
         Will return volume or snapshot information from the array for
         the object specified by existing_ref.
         """
-        if "name" not in existing_ref or not existing_ref["name"]:
+        if ("source-name" not in existing_ref
+                or not existing_ref["source-name"]):
             raise exception.ManageExistingInvalidReference(
                 existing_ref=existing_ref,
-                reason=_("manage_existing requires a 'name'"
+                reason=_("manage_existing requires a 'source-name'"
                          " key to identify an existing volume."))
 
         if is_snap:
             # Purity snapshot names are prefixed with the source volume name.
-            ref_vol_name, ref_snap_suffix = existing_ref['name'].split('.')
+            ref_vol_name, ref_snap_suffix = existing_ref['source-name'].split(
+                '.')
         else:
-            ref_vol_name = existing_ref['name']
+            ref_vol_name = existing_ref['source-name']
 
         if not is_snap and '::' in ref_vol_name:
             # Don't allow for managing volumes in a pod
@@ -1508,7 +1510,7 @@ class PureBaseVolumeDriver(san.SanDriver):
             if volume_info:
                 if is_snap:
                     snapres = current_array.get_volume_snapshots(
-                        names=[existing_ref['name']])
+                        names=[existing_ref['source-name']])
                     if snapres.status_code == 200:
                         snap = list(snapres.items)[0]
                         return snap
@@ -1528,7 +1530,8 @@ class PureBaseVolumeDriver(san.SanDriver):
         # to throw an Invalid Reference exception.
         raise exception.ManageExistingInvalidReference(
             existing_ref=existing_ref,
-            reason=_("Unable to find Purity ref with name=%s") % ref_vol_name)
+            reason=(_("Unable to find Purity ref with source-name=%s")
+                    % ref_vol_name))
 
     def _add_to_group_if_needed(self, volume, vol_name):
         if volume['group_id']:
@@ -1695,7 +1698,7 @@ class PureBaseVolumeDriver(san.SanDriver):
         self._validate_manage_existing_vol_type(volume)
         self._validate_manage_existing_ref(existing_ref)
 
-        ref_vol_name = existing_ref['name']
+        ref_vol_name = existing_ref['source-name']
         current_array = self._get_current_array()
         volume_data = list(current_array.get_volumes(
             names=[ref_vol_name]).items)[0]
@@ -1807,7 +1810,7 @@ class PureBaseVolumeDriver(san.SanDriver):
         Purity.
         """
         self._validate_manage_existing_ref(existing_ref, is_snap=True)
-        ref_snap_name = existing_ref['name']
+        ref_snap_name = existing_ref['source-name']
         new_snap_name = self._get_snap_name(snapshot)
         LOG.info("Renaming existing snapshot %(ref_name)s to "
                  "%(new_name)s", {"ref_name": ref_snap_name,
@@ -2799,6 +2802,31 @@ class PureBaseVolumeDriver(san.SanDriver):
                                 " eradicated - will recreate.", name)
                     source_array.delete_pods(names=[name])
                     self._create_pod_if_not_exist(source_array, name)
+        else:
+            if self._array.safemode:
+                # Now we check to ensure that the created pod does not have a
+                # safemode protection group attached to it as this is not
+                # supported by Cinder
+                safemode_pg = list(
+                    source_array.get_container_default_protections(
+                        names=[name]).items)[0].default_protections
+                if safemode_pg:
+                    pgname = safemode_pg[0].name
+                    res = source_array.patch_container_default_protections(
+                        names=[name],
+                        container_default_protection=(
+                            flasharray.ContainerDefaultProtection(
+                                default_protections=[])))
+                    if res.status_code != 200:
+                        LOG.warning("Failed to remove Default Protection "
+                                    "Container: %s", res.errors[0])
+                    else:
+                        source_array.patch_protection_groups(
+                            names=[pgname],
+                            protection_group=flasharray.ProtectionGroup(
+                                destroyed=True))
+                        source_array.delete_protection_groups(
+                            names=[pgname])
 
     @pure_driver_debug_trace
     def _create_protection_group_if_not_exist(self, source_array, pgname):
@@ -3062,6 +3090,18 @@ class PureBaseVolumeDriver(san.SanDriver):
                 ports += list(
                     array.get_ports(filter="name='" + controller + ".*'").items
                 )
+            lacps = list(
+                array.get_network_interfaces(
+                    filter="eth.subtype='lacp_bond'"
+                ).items
+            )
+            if lacps:
+                for lacp in range(0, len(lacps)):
+                    ports += list(
+                        array.get_ports(
+                            names=[lacps[lacp].name.upper()]
+                        ).items
+                    )
         return ports
 
 
@@ -3710,13 +3750,13 @@ class PureNVMEDriver(PureBaseVolumeDriver, driver.BaseVD):
         valid_nvme_ports = []
         nvme_ports = [port for port in ports if getattr(port, "nqn", None)]
         for port in range(0, len(nvme_ports)):
-            if "ETH" in nvme_ports[port].name:
-                port_detail = list(array.get_network_interfaces(
-                    names=[nvme_ports[port].name]
-                ).items)[0]
-                if port_detail.services[0] == "nvme-" + \
-                        self.configuration.pure_nvme_transport:
-                    valid_nvme_ports.append(nvme_ports[port])
+            port_detail = list(array.get_network_interfaces(
+                names=[nvme_ports[port].name.lower()]
+            ).items)[0]
+            if hasattr(port_detail.eth, "address") and (
+                    port_detail.services[0] == "nvme-" +
+                    self.configuration.pure_nvme_transport):
+                valid_nvme_ports.append(nvme_ports[port])
         if not nvme_ports:
             raise PureDriverException(
                 reason=_("No %(type)s enabled ports on target array.") %

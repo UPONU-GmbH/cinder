@@ -6191,6 +6191,9 @@ def volume_glance_metadata_create(context, volume_id, key, value):
     )
 
     if len(rows) > 0:
+        vol_glance_metadata = rows[0]
+        if vol_glance_metadata.value == str(value):
+            return
         raise exception.GlanceMetadataExists(key=key, volume_id=volume_id)
 
     vol_glance_metadata = models.VolumeGlanceMetadata()
@@ -6221,6 +6224,9 @@ def volume_glance_metadata_bulk_create(context, volume_id, metadata):
         )
 
         if len(rows) > 0:
+            vol_glance_metadata = rows[0]
+            if vol_glance_metadata.value == str(value):
+                continue
             raise exception.GlanceMetadataExists(key=key, volume_id=volume_id)
 
         vol_glance_metadata = models.VolumeGlanceMetadata()
@@ -8094,6 +8100,7 @@ def purge_deleted_rows(context, age_in_days):
     metadata = MetaData()
     metadata.reflect(engine)
 
+    deleted_age = timeutils.utcnow() - dt.timedelta(days=age_in_days)
     for table in reversed(metadata.sorted_tables):
         if 'deleted' not in table.columns.keys():
             continue
@@ -8104,7 +8111,6 @@ def purge_deleted_rows(context, age_in_days):
             {'age': age_in_days, 'table': table},
         )
 
-        deleted_age = timeutils.utcnow() - dt.timedelta(days=age_in_days)
         try:
             # Delete child records first from quality_of_service_specs
             # table to avoid FK constraints
